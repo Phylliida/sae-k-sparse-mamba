@@ -43,7 +43,7 @@ def chunk_and_tokenize(
         The chunked and tokenized dataset.
     """
 
-    def _tokenize_fn(x: dict[str, list]):
+    def _tokenize_fn(x: dict[str, list], tokenizer: PreTrainedTokenizerBase, text_key: str, max_seq_len: int, return_final_batch: bool, ):
         chunk_size = min(tokenizer.model_max_length, max_seq_len)
         sep = tokenizer.eos_token or "<|endoftext|>"
         joined_text = sep.join([""] + x[text_key])
@@ -93,6 +93,7 @@ def chunk_and_tokenize(
         num_proc=num_proc,
         remove_columns=get_columns_all_equal(data),
         load_from_cache_file=load_from_cache_file,
+        fn_kwargs={'tokenizer': tokenizer, "text_key": text_key, "max_seq_len": max_seq_len, "return_final_batch": return_final_batch}
     )
     return data.with_format(format, columns=["input_ids"])
 
