@@ -14,19 +14,22 @@ dataset = load_dataset(
 )
 gpt = HookedMamba.from_pretrained(
     MODEL,
+    device='cuda'
 )
 tokenizer = gpt.tokenizer
 # too many processes crashes, probably memory issue
 tokenized = chunk_and_tokenize(dataset, tokenizer, num_proc=8)
 
 
-layer_input_hooks = ['blocks.{i}.hook_resid_pre' for i in range(gpt.cfg.n_layers)]
+layers = [0,1,2]
+layer_input_hooks = [f'blocks.{i}.hook_resid_pre' for i in layers]
 
 cfg = TrainConfig(
-    SaeConfig(gpt.config.hidden_size),
+    sae=SaeConfig(),
+    d_in=gpt.cfg.d_model,
     batch_size=16,
     hooks=layer_input_hooks,
-    model_kwargs={"fast_ssm": True, "fast_conv": True}
+    model_kwargs={"fast_ssm": True, "fast_conv": True, "stop_at_layer": 3}
 )
 trainer = SaeTrainer(cfg, tokenized, gpt)
 

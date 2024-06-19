@@ -18,7 +18,7 @@ from .utils import geometric_median
 
 class SaeTrainer:
     def __init__(self, cfg: TrainConfig, dataset: Dataset, model: PreTrainedModel):
-        d_in = cfg.hidden_size
+        d_in = cfg.d_in
 
         # If no hooks are specified, angry
         if not cfg.hooks:
@@ -32,7 +32,7 @@ class SaeTrainer:
         assert isinstance(dataset, Sized)
         num_examples = len(dataset)
 
-        device = model.device
+        device = model.cfg.device
         self.model = model
         self.saes = nn.ModuleList([Sae(d_in=d_in, hook=hook, cfg=cfg.sae, device=device) for hook in self.cfg.hooks])
 
@@ -85,7 +85,7 @@ class SaeTrainer:
         print(f"Number of SAE parameters: {num_sae_params:_}")
         print(f"Number of model parameters: {num_model_params:_}")
 
-        device = self.model.device
+        device = self.model.cfg.device
         dl = DataLoader(
             self.dataset,
             batch_size=self.cfg.batch_size,
@@ -109,7 +109,7 @@ class SaeTrainer:
             with torch.no_grad():
                 
                 logits, hidden_list = self.model.run_with_cache(
-                    batch["input_ids"].to("device"), names_filter=self.cfg.hooks, **self.cfg.model_kwargs
+                    batch["input_ids"].to(device), names_filter=self.cfg.hooks, **self.cfg.model_kwargs
                 )
                 hidden_list = [hidden_list[hook] for hook in self.cfg.hooks]
                     

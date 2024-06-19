@@ -23,6 +23,9 @@ class SaeConfig(Serializable):
 class TrainConfig(Serializable):
     sae: SaeConfig
 
+    d_in: int = None
+    """Size of input to model"""
+
     batch_size: int = 8
     """Batch size measured in sequences."""
 
