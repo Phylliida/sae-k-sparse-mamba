@@ -18,24 +18,23 @@ from .utils import geometric_median
 
 class SaeTrainer:
     def __init__(self, cfg: TrainConfig, dataset: Dataset, model: PreTrainedModel):
-        d_in = model.config.hidden_size
+        d_in = cfg.hidden_size
 
-        # If no layers are specified, train on all of them
-        if not cfg.layers:
-            N = model.config.num_hidden_layers
-            cfg.layers = list(range(0, N, cfg.layer_stride))
+        # If no hooks are specified, angry
+        if not cfg.hooks:
+            raise ValueError("Need to specify TrainConfig.hooks")
         
         self.cfg = cfg
         self.dataset = dataset
-        self.distribute_layers()
+        self.distribute_hooks()
 
-        N = len(cfg.layers)
+        N = len(cfg.hooks)
         assert isinstance(dataset, Sized)
         num_examples = len(dataset)
 
         device = model.device
         self.model = model
-        self.saes = nn.ModuleList([Sae(d_in, cfg.sae, device) for _ in range(N)])
+        self.saes = nn.ModuleList([Sae(d_in=d_in, hook=hook, cfg=cfg.sae, device=device) for hook in self.cfg.hooks])
 
         d = d_in * cfg.sae.expansion_factor
         self.num_tokens_since_fired = torch.zeros(N, d, dtype=torch.long, device=device)
@@ -68,7 +67,7 @@ class SaeTrainer:
         torch.set_float32_matmul_precision("high")
 
         rank_zero = not dist.is_initialized() or dist.get_rank() == 0
-        ddp = dist.is_initialized() and not self.cfg.distribute_layers
+        ddp = dist.is_initialized() and not self.cfg.distribute_hooks
 
         if self.cfg.log_to_wandb and rank_zero:
             try:
@@ -108,15 +107,23 @@ class SaeTrainer:
 
             # Forward pass on the model to get the next batch of activations
             with torch.no_grad():
-                hidden_list = self.model(
-                    batch["input_ids"].to(device), output_hidden_states=True
-                ).hidden_states[:-1]
+                
+                logits, hidden_list = model.run_with_cache(
+                    batch["input_ids"].to("device"), names_filter=self.cfg.hooks
+                )
+                # hidden states are tuple containing
+                # [B, L, D] elements
+                # one for embed and one for output of each hook
+                # we don't bother with last layer
+                #hidden_list = self.model(
+                #    batch["input_ids"].to(device), output_hidden_states=True
+                #).hidden_states[:-1]
 
-                if self.layer_plan:
+                if self.hook_plan:
                     hidden_list = self.scatter_hiddens(hidden_list)
                 else:
-                    hidden_list = [hidden_list[i] for i in self.cfg.layers]
-
+                    pass
+                    
             # 'raw' never has a DDP wrapper
             for j, (hiddens, raw) in enumerate(zip(hidden_list, self.saes)):
                 hiddens = hiddens.flatten(0, 1)
@@ -196,19 +203,19 @@ class SaeTrainer:
 
                     for j in range(len(self.saes)):
                         mask = self.num_tokens_since_fired[j] > self.cfg.dead_feature_threshold
-                        layer_idx = self.cfg.layers[j]
+                        hook = self.cfg.hooks[j]
 
                         info.update({
-                            f"fvu/layer_{layer_idx}": avg_fvu[j].item(),
-                            f"dead_pct/layer_{layer_idx}": mask.mean(dtype=torch.float32).item(),
+                            f"fvu/hook_{hook}": avg_fvu[j].item(),
+                            f"dead_pct/hook_{hook}": mask.mean(dtype=torch.float32).item(),
                         })
                         if self.cfg.auxk_alpha > 0:
-                            info[f"auxk/layer_{layer_idx}"] = avg_auxk_loss[j].item()
+                            info[f"auxk/hook_{hook}"] = avg_auxk_loss[j].item()
 
                     avg_auxk_loss.zero_()
                     avg_fvu.zero_()
 
-                    if self.cfg.distribute_layers:
+                    if self.cfg.distribute_hooks:
                         outputs = [{} for _ in range(dist.get_world_size())]
                         dist.gather_object(info, outputs if rank_zero else None)
                         info.update({k: v for out in outputs for k, v in out.items()})
@@ -224,7 +231,7 @@ class SaeTrainer:
     
     def maybe_all_cat(self, x: Tensor) -> Tensor:
         """Concatenate a tensor across all processes."""
-        if not dist.is_initialized() or self.cfg.distribute_layers:
+        if not dist.is_initialized() or self.cfg.distribute_hooks:
             return x
 
         buffer = x.new_empty([dist.get_world_size() * x.shape[0], *x.shape[1:]])
@@ -233,7 +240,7 @@ class SaeTrainer:
 
     
     def maybe_all_reduce(self, x: Tensor, op: str = "mean") -> Tensor:
-        if not dist.is_initialized() or self.cfg.distribute_layers:
+        if not dist.is_initialized() or self.cfg.distribute_hooks:
             return x
 
         if op == "sum":
@@ -248,39 +255,39 @@ class SaeTrainer:
 
         return x
     
-    def distribute_layers(self):
-        """Prepare a plan for distributing layers across ranks."""
-        if not self.cfg.distribute_layers:
-            self.layer_plan = {}
-            print(f"Training on layers: {self.cfg.layers}")
+    def distribute_hooks(self):
+        """Prepare a plan for distributing hooks across ranks."""
+        if not self.cfg.distribute_hooks:
+            self.hook_plan = {}
+            print(f"Training on hooks: {self.cfg.hooks}")
             return
 
-        layers_per_rank, rem = divmod(len(self.cfg.layers), dist.get_world_size())
-        assert rem == 0, "Number of layers must be divisible by world size"
+        hooks_per_rank, rem = divmod(len(self.cfg.hooks), dist.get_world_size())
+        assert rem == 0, "Number of hooks must be divisible by world size"
 
-        # Each rank gets a subset of the layers
-        self.layer_plan = {
-            rank: self.cfg.layers[start:start + layers_per_rank]
-            for rank, start in enumerate(range(0, len(self.cfg.layers), layers_per_rank))
+        # Each rank gets a subset of the hooks
+        self.hook_plan = {
+            rank: self.cfg.hooks[start:start + hooks_per_rank]
+            for rank, start in enumerate(range(0, len(self.cfg.hooks), hooks_per_rank))
         }
-        for rank, layers in self.layer_plan.items():
-            print(f"Rank {rank} layers: {layers}")
+        for rank, hooks in self.hook_plan.items():
+            print(f"Rank {rank} hooks: {hooks}")
         
-        self.cfg.layers = self.layer_plan[dist.get_rank()]
+        self.cfg.hooks = self.hook_plan[dist.get_rank()]
 
     def scatter_hiddens(self, hidden_list: list[Tensor]) -> list[Tensor]:
         """Scatter & gather the hidden states across ranks."""
         outputs = [
-            # Add a new leading "layer" dimension to each tensor
-            torch.stack([hidden_list[i] for i in layers], dim=1)
-            for layers in self.layer_plan.values()
+            # Add a new leading "hook" dimension to each tensor
+            torch.stack([hidden_list[i] for i in hooks], dim=1)
+            for hooks in self.hook_plan.values()
         ]
         # Allocate one contiguous buffer to minimize memcpys
         buffer = outputs[0].new_empty(
             # The (micro)batch size times the world size
             hidden_list[0].shape[0] * dist.get_world_size(),
-            # The number of layers we expect to receive
-            len(self.layer_plan[dist.get_rank()]),
+            # The number of hooks we expect to receive
+            len(self.hook_plan[dist.get_rank()]),
             # All other dimensions
             *hidden_list[0].shape[1:],
         )
@@ -289,16 +296,16 @@ class SaeTrainer:
         inputs = buffer.split([len(output) for output in outputs])
         dist.all_to_all([x for x in inputs], outputs)
 
-        # Return a list of results, one for each layerfi
+        # Return a list of results, one for each hook
         return buffer.unbind(1)
 
     def save(self):
         """Save the SAEs to disk."""
-        if (dist.is_initialized() and dist.get_rank() != 0) and not self.cfg.distribute_layers:
+        if (dist.is_initialized() and dist.get_rank() != 0) and not self.cfg.distribute_hooks:
             return
 
-        for i, sae in zip(self.cfg.layers, self.saes):
+        for hook, sae in zip(self.cfg.hooks, self.saes):
             assert isinstance(sae, Sae)
 
             path = self.cfg.run_name or "checkpoints"
-            sae.save_to_disk(f"{path}/layer_{i}.pt")
+            sae.save_to_disk(f"{path}/hook_{hook}.pt")

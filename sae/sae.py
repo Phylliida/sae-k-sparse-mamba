@@ -32,13 +32,15 @@ class Sae(nn.Module):
     def __init__(
         self,
         d_in: int,
+        hook: str,
         cfg: SaeConfig,
         device: str | torch.device = "cpu",
         dtype: torch.dtype | None = None,
     ):
         super().__init__()
-        self.cfg = cfg
         self.d_in = d_in
+        self.hook = hook
+        self.cfg = cfg
         d_sae = d_in * cfg.expansion_factor
 
         self.encoder = nn.Linear(d_in, d_sae, device=device, dtype=dtype)
