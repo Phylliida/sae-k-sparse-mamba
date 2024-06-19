@@ -43,13 +43,10 @@ class TrainConfig(Serializable):
     dead_feature_threshold: int = 10_000_000
     """Number of tokens after which a feature is considered dead."""
 
-    layers: list[int] = list_field()
-    """List of layer indices to train SAEs on."""
+    hooks: list[str] = list_field()
+    """List of hook names that provide data to train SAEs on."""
 
-    layer_stride: int = 1
-    """Stride between layers to train SAEs on."""
-
-    distribute_layers: bool = False
+    distribute_hooks: bool = False
     """Store a single copy of each SAE, instead of copying them across devices."""
 
     save_every: int = 1000
