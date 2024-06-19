@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from simple_parsing import list_field, Serializable
+from simple_parsing import list_field, Serializable, field
 
 from . import __version__
 
@@ -52,6 +52,7 @@ class TrainConfig(Serializable):
     save_every: int = 1000
     """Save SAEs every `save_every` steps."""
 
+    model_kwargs: dict = field(default_factory = lambda: {})
     log_to_wandb: bool = True
     run_name: str | None = None
     wandb_log_frequency: int = 1

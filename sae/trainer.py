@@ -108,9 +108,11 @@ class SaeTrainer:
             # Forward pass on the model to get the next batch of activations
             with torch.no_grad():
                 
-                logits, hidden_list = model.run_with_cache(
-                    batch["input_ids"].to("device"), names_filter=self.cfg.hooks
+                logits, hidden_list = self.model.run_with_cache(
+                    batch["input_ids"].to("device"), names_filter=self.cfg.hooks, **self.cfg.model_kwargs
                 )
+                hidden_list = [hidden_list[hook] for hook in self.cfg.hooks]
+                    
                 # hidden states are tuple containing
                 # [B, L, D] elements
                 # one for embed and one for output of each hook

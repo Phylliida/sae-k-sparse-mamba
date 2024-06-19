@@ -21,8 +21,13 @@ gpt = HookedMamba.from_pretrained(
     torch_dtype=torch.bfloat16,
 )
 
+layer_input_hooks = ['blocks.{i}.hook_resid_pre' for i in range(gpt.cfg.n_layers)]
+
 cfg = TrainConfig(
-    SaeConfig(gpt.config.hidden_size), batch_size=16
+    SaeConfig(gpt.config.hidden_size),
+    batch_size=16,
+    hooks=layer_input_hooks,
+    model_kwargs={"fast_ssm": True, "fast_conv": True}
 )
 trainer = SaeTrainer(cfg, tokenized, gpt)
 
