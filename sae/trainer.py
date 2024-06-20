@@ -9,7 +9,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader, Dataset
 from tqdm.auto import tqdm
 from transformers import get_linear_schedule_with_warmup, PreTrainedModel
-
+from mamba_lens.input_dependent_hooks import clean_hooks
 from . import __version__
 from .config import TrainConfig
 from .sae import Sae
@@ -101,17 +101,28 @@ class SaeTrainer:
         avg_auxk_loss = torch.zeros(len(self.saes), device=device)
         avg_fvu = torch.zeros(len(self.saes), device=device)
 
+        # setup hooks once to avoid the overhead
+        clean_hooks(self.model)
+        global hidden_list
+        hidden_list = [None for hook in self.cfg.hooks]
+        hook_to_i = dict([(hook,i) for (i,hook) in enumerate(self.cfg.hooks)])
+        def cache_hook(x,hook):
+            global hidden_list
+            hidden_list[hook_to_i[hook.name]] = x
+            return x
+
+        for hook in self.cfg.hooks:
+            self.model.add_hook(hook, cache_hook, 'fwd')
+                
         for i, batch in enumerate(pbar):
             # Bookkeeping for dead feature detection
             num_tokens_in_step += batch["input_ids"].numel()
 
             # Forward pass on the model to get the next batch of activations
             with torch.no_grad():
-                
-                logits, hidden_list = self.model.run_with_cache(
-                    batch["input_ids"].to(device), names_filter=self.cfg.hooks, **self.cfg.model_kwargs
+                logits = self.model.forward(
+                    batch["input_ids"].to(device), **self.cfg.model_kwargs
                 )
-                hidden_list = [hidden_list[hook] for hook in self.cfg.hooks]
                     
                 # hidden states are tuple containing
                 # [B, L, D] elements
