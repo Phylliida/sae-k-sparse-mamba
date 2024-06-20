@@ -61,7 +61,8 @@ cfg = TrainConfig(
     d_in=gpt.cfg.d_model,
     batch_size=32,
     hooks=layer_input_hooks,
-    model_kwargs={"fast_ssm": True, "fast_conv": True, 'stop_at_layer': max(layers)+1}
+    model_kwargs={"fast_ssm": True, "fast_conv": True, 'stop_at_layer': max(layers)+1},
+    run_name=" ".join(layer_input_hooks),
 )
 
 class RNGState(object):

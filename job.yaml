@@ -16,7 +16,7 @@ spec:
     metadata:
       name: devbox
     spec:
-      priorityClassName: interactive
+      priorityClassName: normal-batch
       volumes:
       - name: working-storage
         persistentVolumeClaim:
