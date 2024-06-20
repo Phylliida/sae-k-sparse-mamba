@@ -1,0 +1,58 @@
+# sample-job.yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: mamba-sae-job  # use a fixed name
+  # generateName: sample-job-   # use a partially random name
+  labels:
+    kueue.x-k8s.io/queue-name: farai
+spec:
+  ttlSecondsAfterFinished: 100
+  backoffLimit: 4  # How many times to try to run the job until giving up
+  completions: 5 # Run 5 pods total. This should match the number of sweep commands.
+  parallelism: 5 # Run up to 5 pods at a time.
+  completionMode: "Indexed" # Give each pod a unique index.
+  template:
+    metadata:
+      name: devbox
+    spec:
+      priorityClassName: interactive
+      volumes:
+      - name: working-storage
+        persistentVolumeClaim:
+          claimName: devbox-storage-2
+      # This job does not need the shared NFS, so we can tolerate the lack of a working connection to the NFS server.
+      tolerations:
+      - key: "nfs_not_working"
+        operator: "Exists"
+        effect: "NoSchedule"
+      # Prefer scheduling in non-NFS nodes, to improve cluster utilization in case of NFS outage.
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 1
+            preference:
+              matchExpressions:
+              - key: nfs_not_working
+                operator: In
+                values:
+                - "true"
+      containers:
+      - name: devbox
+        image: ghcr.io/phylliida/mamba-acdc:latest
+        workingDir: /home/dev/sae-k-sparse-mamba
+        command:
+          - /home/dev/sae-k-sparse-mamba/run.sh
+        resources:
+          # Request CPUs, limit memory and GPUs.
+          requests:
+            cpu: 1
+          limits:
+            # These are about 1/8 of the resources of a node. If your devbox
+            # does not need a GPU, you should set the GPU limit to 0 instead.
+            memory: "60G"
+            nvidia.com/gpu: 1
+        volumeMounts:
+          - name: working-storage
+            mountPath: /home/dev
+      restartPolicy: Never

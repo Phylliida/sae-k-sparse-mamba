@@ -30,7 +30,7 @@ class SaeTrainer:
 
         N = len(cfg.hooks)
         assert isinstance(dataset, Sized)
-        num_examples = len(dataset)
+        self.num_examples = len(dataset)
 
         device = model.cfg.device
         self.model = model
@@ -38,9 +38,14 @@ class SaeTrainer:
 
         d = d_in * cfg.sae.expansion_factor
         self.num_tokens_since_fired = torch.zeros(N, d, dtype=torch.long, device=device)
+        
+        self.optimizer, self.lr_scheduler = self.get_optimizer_and_scheduler(saes=self.saes)
+        
 
+    def get_optimizer_and_scheduler(self, saes):
+        d = self.cfg.d_in * self.cfg.sae.expansion_factor
         # Auto-select LR using 1 / sqrt(d) scaling law from Figure 3 of the paper
-        if (lr := cfg.lr) is None:
+        if (lr := self.cfg.lr) is None:
             # Base LR is 1e-4 for num latents = 2 ** 13
             scale = d / (2 ** 14)
 
@@ -56,13 +61,14 @@ class SaeTrainer:
 
             print("bitsandbytes 8-bit Adam not available, using torch.optim.Adam")
             print("Run `pip install bitsandbytes` for less memory usage.")
-
-        self.optimizer = Adam(self.saes.parameters(), lr=lr)
-        self.lr_scheduler = get_linear_schedule_with_warmup(
-            self.optimizer, cfg.lr_warmup_steps, num_examples // cfg.batch_size
+        
+        optimizer = Adam(saes.parameters(), lr=lr)
+        lr_scheduler = get_linear_schedule_with_warmup(
+            optimizer, self.cfg.lr_warmup_steps, self.num_examples // self.cfg.batch_size
         )
+        return optimizer, lr_scheduler
 
-    def fit(self):
+    def fit(self, wandb_id=None, resume=False):
         # Use Tensor Cores even for fp32 matmuls
         torch.set_float32_matmul_precision("high")
 
@@ -72,9 +78,9 @@ class SaeTrainer:
         if self.cfg.log_to_wandb and rank_zero:
             try:
                 import wandb
-
+                
                 wandb.init(
-                    name=self.cfg.run_name, config=asdict(self.cfg), save_code=True
+                    name=self.cfg.run_name, config=asdict(self.cfg), save_code=True, resume=resume, id=wandb_id
                 )
             except ImportError:
                 print("Weights & Biases not installed, skipping logging.")
@@ -86,16 +92,18 @@ class SaeTrainer:
         print(f"Number of model parameters: {num_model_params:_}")
 
         device = self.model.cfg.device
+        
         dl = DataLoader(
             self.dataset,
             batch_size=self.cfg.batch_size,
             shuffle=True,
         )
         pbar = tqdm(dl, desc="Training", disable=not rank_zero)
-
-        # This mask is zeroed out every training step
-        did_fire = torch.zeros_like(self.num_tokens_since_fired, dtype=torch.bool)
-        num_tokens_in_step = 0
+        if not resume:
+            self.iters = 0
+            # This mask is zeroed out every training step
+            self.did_fire = torch.zeros_like(self.num_tokens_since_fired, dtype=torch.bool)
+            self.num_tokens_in_step = 0
 
         # For logging purposes
         avg_auxk_loss = torch.zeros(len(self.saes), device=device)
@@ -114,12 +122,25 @@ class SaeTrainer:
         for hook in self.cfg.hooks:
             self.model.add_hook(hook, cache_hook, 'fwd')
                 
-        for i, batch in enumerate(pbar):
-            # Bookkeeping for dead feature detection
-            num_tokens_in_step += batch["input_ids"].numel()
+        if self.iters > 0:
+            # this isn't done below so we need to do it here instead
+            maybe_wrapped = [
+                DDP(sae, device_ids=[dist.get_rank()])
+                for sae in self.saes
+            ] if ddp else self.saes
 
+            print("fast forwarding")
+
+        for i, batch in enumerate(pbar):
+            if i < self.iters: continue
+            if i == self.iters and resume:
+                self.resume_rng_state.set()
+            # Bookkeeping for dead feature detection
+            self.num_tokens_in_step += batch["input_ids"].numel()
+            self.iters = i
             # Forward pass on the model to get the next batch of activations
             with torch.no_grad():
+                hidden_list = [None for hook in self.cfg.hooks] 
                 logits = self.model.forward(
                     batch["input_ids"].to(device), **self.cfg.model_kwargs
                 )
@@ -186,8 +207,8 @@ class SaeTrainer:
                     loss.div(acc_steps).backward()
 
                     # Update the did_fire mask
-                    did_fire[j][out.latent_indices.flatten()] = True
-                    self.maybe_all_reduce(did_fire[j], "max")    # max is boolean "any"
+                    self.did_fire[j][out.latent_indices.flatten()] = True
+                    self.maybe_all_reduce(self.did_fire[j], "max")    # max is boolean "any"
 
                 # Clip gradient norm independently for each SAE
                 torch.nn.utils.clip_grad_norm_(raw.parameters(), 1.0)
@@ -205,11 +226,11 @@ class SaeTrainer:
 
                 ###############
                 with torch.no_grad():
-                    self.num_tokens_since_fired += num_tokens_in_step
-                    self.num_tokens_since_fired[did_fire] = 0
+                    self.num_tokens_since_fired += self.num_tokens_in_step
+                    self.num_tokens_since_fired[self.did_fire] = 0
 
-                    did_fire.zero_()  # reset the mask
-                    num_tokens_in_step = 0
+                    self.did_fire.zero_()  # reset the mask
+                    self.num_tokens_in_step = 0
 
                 if self.cfg.log_to_wandb and (step + 1) % self.cfg.wandb_log_frequency == 0:
                     info = {}
