@@ -53,15 +53,15 @@ tokenizer = gpt.tokenizer
 tokenized = chunk_and_tokenize(dataset, tokenizer, num_proc=8)
 
 
-layers = [0]
-layer_input_hooks = [f'hook_embed' for i in layers]
+layers = [index]
+layer_input_hooks = [f'blocks.{index}.hook_resid_pre' for i in layers]
 
 cfg = TrainConfig(
     sae=SaeConfig(),
     d_in=gpt.cfg.d_model,
     batch_size=32,
     hooks=layer_input_hooks,
-    model_kwargs={"fast_ssm": True, "fast_conv": True, 'stop_at_layer': 0}
+    model_kwargs={"fast_ssm": True, "fast_conv": True, 'stop_at_layer': max(layers)+1}
 )
 
 class RNGState(object):

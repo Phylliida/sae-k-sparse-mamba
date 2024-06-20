@@ -135,6 +135,8 @@ class SaeTrainer:
             if i < self.iters: continue
             if i == self.iters and resume:
                 self.resume_rng_state.set()
+            if i % 100 == 0:
+                print(i)
             # Bookkeeping for dead feature detection
             self.num_tokens_in_step += batch["input_ids"].numel()
             self.iters = i
