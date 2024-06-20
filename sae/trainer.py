@@ -98,17 +98,25 @@ class SaeTrainer:
             batch_size=self.cfg.batch_size,
             shuffle=True,
         )
-        pbar = tqdm(dl, desc="Training", disable=not rank_zero)
         if not resume:
             self.iters = 0
             # This mask is zeroed out every training step
             self.did_fire = torch.zeros_like(self.num_tokens_since_fired, dtype=torch.bool)
             self.num_tokens_in_step = 0
 
-        # For logging purposes
-        avg_auxk_loss = torch.zeros(len(self.saes), device=device)
-        avg_fvu = torch.zeros(len(self.saes), device=device)
+            # For logging purposes
+            self.avg_auxk_loss = torch.zeros(len(self.saes), device=device)
+            self.avg_fvu = torch.zeros(len(self.saes), device=device)
 
+        if self.iters > 0:
+            # this isn't done below so we need to do it here instead
+            maybe_wrapped = [
+                DDP(sae, device_ids=[dist.get_rank()])
+                for sae in self.saes
+            ] if ddp else self.saes
+
+            print("fast forwarding")
+        pbar = tqdm(dl, desc="Training", disable=not rank_zero)
         # setup hooks once to avoid the overhead
         clean_hooks(self.model)
         global hidden_list
@@ -122,14 +130,6 @@ class SaeTrainer:
         for hook in self.cfg.hooks:
             self.model.add_hook(hook, cache_hook, 'fwd')
                 
-        if self.iters > 0:
-            # this isn't done below so we need to do it here instead
-            maybe_wrapped = [
-                DDP(sae, device_ids=[dist.get_rank()])
-                for sae in self.saes
-            ] if ddp else self.saes
-
-            print("fast forwarding")
 
         for i, batch in enumerate(pbar):
             if i < self.iters: continue
@@ -199,9 +199,9 @@ class SaeTrainer:
                         ),
                     )
 
-                    avg_fvu[j] += self.maybe_all_reduce(out.fvu.detach()) / denom
+                    self.avg_fvu[j] += self.maybe_all_reduce(out.fvu.detach()) / denom
                     if self.cfg.auxk_alpha > 0:
-                        avg_auxk_loss[j] += self.maybe_all_reduce(out.auxk_loss.detach()) / denom
+                        self.avg_auxk_loss[j] += self.maybe_all_reduce(out.auxk_loss.detach()) / denom
 
                     loss = out.fvu + self.cfg.auxk_alpha * out.auxk_loss
                     loss.div(acc_steps).backward()
@@ -240,14 +240,14 @@ class SaeTrainer:
                         hook = self.cfg.hooks[j]
 
                         info.update({
-                            f"fvu/hook_{hook}": avg_fvu[j].item(),
+                            f"fvu/hook_{hook}": self.avg_fvu[j].item(),
                             f"dead_pct/hook_{hook}": mask.mean(dtype=torch.float32).item(),
                         })
                         if self.cfg.auxk_alpha > 0:
-                            info[f"auxk/hook_{hook}"] = avg_auxk_loss[j].item()
+                            info[f"auxk/hook_{hook}"] = self.avg_auxk_loss[j].item()
 
-                    avg_auxk_loss.zero_()
-                    avg_fvu.zero_()
+                    self.avg_auxk_loss.zero_()
+                    self.avg_fvu.zero_()
 
                     if self.cfg.distribute_hooks:
                         outputs = [{} for _ in range(dist.get_world_size())]
