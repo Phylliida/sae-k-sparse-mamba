@@ -71,7 +71,7 @@ cfg = TrainConfig(
     sae=SaeConfig(k=gpt.cfg.d_model//2, # recommended k size
     ),
     d_in=gpt.cfg.d_model,
-    batch_size=32,
+    batch_size=64,
     hooks=layer_input_hooks,
     model_kwargs={"fast_ssm": True, "fast_conv": True, 'stop_at_layer': 0},# max(layers)+1},
     run_name=str(lr) + " " + job_name_text + " ".join(layer_input_hooks),
