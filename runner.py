@@ -18,8 +18,14 @@ import pickle
 if not 'JOB_NAME' in os.environ or os.environ['JOB_NAME'] is None or os.environ['JOB_NAME'] == "":
     raise ValueError(f"Need to set environment variable JOB_NAME")
 
-index = int(os.environ['JOB_COMPLETION_INDEX'])
 
+if os.environ['JOB_COMPLETION_INDEX'] is None or os.environ['JOB_COMPLETION_INDEX'] == "":
+    index = 0
+    print("no index, running as a standalone script?")
+else:
+    index = int(os.environ['JOB_COMPLETION_INDEX'])
+
+job_name = os.environ['JOB_NAME'] + str(index)
 job_name_text = os.environ['JOB_NAME'] + str(index) + ".txt"
 
 if os.path.exists(job_name_text):
@@ -53,16 +59,24 @@ tokenizer = gpt.tokenizer
 tokenized = chunk_and_tokenize(dataset, tokenizer, num_proc=8)
 
 
-layers = [index]
-layer_input_hooks = [f'blocks.{index}.hook_resid_pre' for i in layers]
+layers = [0]
+#layer_input_hooks = [f'blocks.{0}.hook_resid_pre' for i in layers]
+layer_input_hooks = [f'hook_embed' for i in layers]
+
+base_lr = 0.0001414213562373095
+try_lrs = [0.00018, 0.00017, 0.00016, 0.00015, 0.0001414213562373095, 0.00013, 0.00012, 0.00011]
+lr = try_lrs[index]
 
 cfg = TrainConfig(
-    sae=SaeConfig(),
+    sae=SaeConfig(k=gpt.cfg.d_model//2, # recommended k size
+    ),
     d_in=gpt.cfg.d_model,
     batch_size=32,
     hooks=layer_input_hooks,
-    model_kwargs={"fast_ssm": True, "fast_conv": True, 'stop_at_layer': max(layers)+1},
-    run_name=" ".join(layer_input_hooks),
+    model_kwargs={"fast_ssm": True, "fast_conv": True, 'stop_at_layer': 0},# max(layers)+1},
+    run_name=str(lr) + " " + job_name_text + " ".join(layer_input_hooks),
+    grad_acc_steps=8,
+    micro_acc_steps=2,
 )
 
 class RNGState(object):
@@ -78,7 +92,7 @@ class RNGState(object):
         np.random.set_state(self.numpy_state)
         random.setstate(self.random_state)
 
-save_path = job_name_text + ".pkl"
+save_path = job_name + ".pkl"
 
 if resume and not os.path.exists(save_path):
     print("no checkpoint found, starting from scratch")

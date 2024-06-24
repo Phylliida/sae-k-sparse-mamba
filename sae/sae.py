@@ -54,7 +54,7 @@ class Sae(nn.Module):
         self.b_dec = nn.Parameter(torch.zeros(d_in, dtype=dtype, device=device))
 
     @staticmethod
-    def load_from_disk(path: Path | str, device: str | torch.device = "cpu") -> "Sae":
+    def load_from_disk(path: Path | str, hook : str, device: str | torch.device = "cpu") -> "Sae":
         path = Path(path)
 
         with open(path / "cfg.json", "r") as f:
@@ -62,7 +62,7 @@ class Sae(nn.Module):
             d_in = cfg_dict.pop("d_in")
             cfg = SaeConfig(**cfg_dict)
 
-        sae = Sae(d_in, cfg, device=device)
+        sae = Sae(d_in, hook=hook, cfg=cfg, device=device)
         load_model(sae, str(path / "sae.safetensors"), device=str(device))
         return sae
 

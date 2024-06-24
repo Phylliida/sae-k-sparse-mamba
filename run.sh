@@ -1,2 +1,2 @@
 #!/bin/bash
-JOB_NAME=initialTry python runner.py
+JOB_NAME=initialTry7 python runner.py
