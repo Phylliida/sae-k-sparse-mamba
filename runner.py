@@ -61,7 +61,8 @@ tokenized = chunk_and_tokenize(dataset, tokenizer, num_proc=8)
 
 offset = 1
 layers = [offset+index]
-layer_input_hooks = [f'blocks.{i}.hook_resid_pre' for i in layers]
+#layer_input_hooks = [f'blocks.{i}.hook_resid_pre' for i in layers]
+layer_input_hooks = [f'blocks.{i}.hook_out_proj' for i in layers]
 #layer_input_hooks = [f'hook_embed']
 
 
