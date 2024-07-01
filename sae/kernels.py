@@ -413,7 +413,7 @@ class TritonDecoder(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad_output):
         sparse_indices, sparse_values, decoder_weight = ctx.saved_tensors
-
+        grad_output = grad_output.contiguous()
         assert (
             grad_output.is_contiguous()
         ), "grad_output must be contiguous; this is probably because the subsequent op was a .sum() or something like that, which returns a non contiguous gradient"

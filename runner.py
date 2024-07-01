@@ -59,13 +59,19 @@ tokenizer = gpt.tokenizer
 tokenized = chunk_and_tokenize(dataset, tokenizer, num_proc=8)
 
 
-layers = [0]
-#layer_input_hooks = [f'blocks.{0}.hook_resid_pre' for i in layers]
-layer_input_hooks = [f'hook_embed' for i in layers]
+offset = 1
+layers = [offset+index]
+layer_input_hooks = [f'blocks.{i}.hook_resid_pre' for i in layers]
+#layer_input_hooks = [f'hook_embed']
+
 
 base_lr = 0.0001414213562373095
-try_lrs = [0.00018, 0.00017, 0.00016, 0.00015, 0.0001414213562373095, 0.00013, 0.00012, 0.00011]
-lr = try_lrs[index]
+#try_lrs = [0.000005, 0.00001, 0.00002, 0.00003, 0.00004, 0.00005, 0.00006]
+#try_lrs = [0.000005, 0.00001, 0.00002, 0.00003, 0.00004, 0.00005, 0.00006]
+#try_lrs = [float(f) for f in ['0.00011', '0.00012', '0.00013', '0.00015', '0.00016', '0.00017', '0.00018']]
+#lr = try_lrs[index]
+lr = 0.000125 # did some hparam sweep and this seems pretty good
+lr = base_lr
 
 cfg = TrainConfig(
     sae=SaeConfig(k=gpt.cfg.d_model//2, # recommended k size
@@ -73,7 +79,7 @@ cfg = TrainConfig(
     d_in=gpt.cfg.d_model,
     batch_size=64,
     hooks=layer_input_hooks,
-    model_kwargs={"fast_ssm": True, "fast_conv": True, 'stop_at_layer': 0},# max(layers)+1},
+    model_kwargs={"fast_ssm": True, "fast_conv": True, 'stop_at_layer': max(layers)+1},
     run_name=str(lr) + " " + job_name_text + " ".join(layer_input_hooks),
     grad_acc_steps=8,
     micro_acc_steps=2,
